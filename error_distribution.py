@@ -49,7 +49,6 @@ def estimate_error_bam(bam_path):
     num_records = 0
     num_unaligned = 0
     max_error_rate = 0
-    min_error_rate = 0
     for alignment in bam.fetch(until_eof=True):
         num_records += 1
         if alignment.cigarstring == None:
@@ -64,14 +63,12 @@ def estimate_error_bam(bam_path):
         total_H_clip += counts[5]
         total_mapped_len += alignment.infer_read_length()
         total_aligned_len += alignment.query_alignment_length
-        error = total_mismatch + total_del + total_ins + total_H_clip + total_S_clip
+        error = counts[8] + counts[2] + counts[1] + counts[5] + counts[4]
         error_rate = error / alignment.infer_read_length()
         if (error_rate > max_error_rate):
             max_error_rate = error_rate
-        if (error_rate < min_error_rate):
-            min_error_rate = error_rate
     bam.close()
-    return total_mismatch / total_aligned_len, total_ins / total_aligned_len, total_del / total_aligned_len, total_S_clip / total_mapped_len, total_H_clip / total_mapped_len, num_unaligned / num_records, min_error_rate, max_error_rate
+    return total_mismatch / total_aligned_len, total_ins / total_aligned_len, total_del / total_aligned_len, total_S_clip / total_mapped_len, total_H_clip / total_mapped_len, num_unaligned / num_records, max_error_rate
 
 
 '''
@@ -108,12 +105,11 @@ if __name__ == '__main__':
         rates = estimate_error_bam(args.input)
     else:
         rates = estimate_error_reads(args.input, args.ref, args.k, args.num_threads)
-    subs_rate, ins_rate, del_rate, Sc_rate, Hc_rate, unmapped_rate, min_error_rate, max_error_rate = rates
+    subs_rate, ins_rate, del_rate, Sc_rate, Hc_rate, unmapped_rate, max_error_rate = rates
     print(f'substitution rate: {subs_rate * 100:.3}%')
     print(f'insertion rate: {ins_rate * 100:.3}%')
     print(f'deletion rate: {del_rate * 100:.3}%')
     print(f'soft clip rate: {Sc_rate * 100:.3}%')
     print(f'hard clip rate: {Hc_rate * 100:.3}%')
     print(f'unmapped rate: {unmapped_rate * 100:.3}%')
-    print(f'max error rate: {max_error_rate * 100: .3}%')
-    print(f'min error rate: {min_error_rate * 100: .3}%')
+    print(f'max error rate: {max_error_rate * 100:.3}%')
