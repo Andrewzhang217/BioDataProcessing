@@ -10,7 +10,24 @@ import argparse
 def correct_error():
     return None
 
-def generate_cigar(align_map):
+
+def generate_cigar(align_map, reads):
+    cigar_map = defaultdict(lambda: defaultdict(None))
+    for query_seq in align_map:
+        start = query_seq[0][1]
+        end = query_seq[0][2]
+        exact_query_seq = reads[query_seq][start:end]
+        for target_seq in query_seq:
+            target_name = target_seq[4]
+            target_start = target_seq[6]
+            target_end = target_seq[7]
+            exact_target_seq = reads[target_name][target_start:target_end]
+            cigar = edlib.align(exact_query_seq, exact_target_seq)
+            cigar_map[query_seq] += cigar
+
+    print(len(cigar_map))
+    return cigar_map
+
 
 def get_reads(input_file):
     file_type = Path(input_file).suffix
@@ -19,32 +36,36 @@ def get_reads(input_file):
         file_type = 'fastq'
 
     records = list(SeqIO.parse(input_file, file_type))
+    records_map = defaultdict(None)
+    for record in records:
+        records_map[record.name] = record.seq
+    return records_map
 
-    return records
 
 def parse_paf(paf_file):
     f = open(paf_file, 'r')
     lines = f.readlines()
     f.close()
-    align_map = defaultdict(None)
+    dst = defaultdict(lambda: defaultdict(None))
     for line in lines:
         copy = line.strip()
         (query_seq_name, query_seq_len, query_start, query_end, strand, target_seq_name,
-         target_seq_len, target_start, target_end, num_residue_matchm, align_block_len, map_quality) = copy.split('\t')
-        align_map[query_seq_name] = (query_seq_len, query_start, query_end, strand, target_seq_name,
-                                     target_seq_len, target_start, target_end, num_residue_matchm, align_block_len,
-                                     map_quality)
-        print(query_seq_name)
+         target_seq_len, target_start, target_end, num_residue_match, align_block_len, map_quality) = copy.split('\t')
+        dst[query_seq_name] += (query_seq_len, query_start, query_end, strand, target_seq_name,
+                                target_seq_len, target_start, target_end, num_residue_match, align_block_len,
+                                map_quality)
+    print(len(dst))
+    return dst
 
-    return align_map
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Baseline model for error correction')
     parser.add_argument('-i', '--input', type=str, help='path of the input FASTA/Q file.')
-    parser.add_argument('-p', '--paf', type = str, help = 'path of the input PAF file.')
+    parser.add_argument('-p', '--paf', type=str, help='path of the input PAF file.')
     parser.add_argument('-o', '--output', type=str, help='path of error corrected reads file')
     args = parser.parse_args()
 
-    reads = get_reads(input)
+    reads = get_reads(args.input)
     align_map = parse_paf(args.paf)
+    generate_cigar(align_map, reads)
     print('Finished')
