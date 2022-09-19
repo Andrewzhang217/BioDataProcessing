@@ -7,7 +7,20 @@ from collections import defaultdict
 import argparse
 
 
-def correct_error():
+def correct_error(cigar_map, out_path):
+
+    for query_read in cigar_map:
+        for cigar in query_read:
+            print(cigar)
+    # for record in SeqIO.parse(in_path, file_type):
+    #     r = rle(str(record.seq))
+    #     sr = SeqRecord(Seq(r))
+    #     sr.id = record.id
+    #     sr.name = record.name
+    #     sr.description = record.description
+    #     rles.append(sr)
+    #
+    # SeqIO.write(ec_reads, out_path, 'fasta')
     return None
 
 
@@ -46,14 +59,14 @@ def parse_paf(paf_file):
     f = open(paf_file, 'r')
     lines = f.readlines()
     f.close()
-    dst = defaultdict(lambda: defaultdict(None))
+    dst = defaultdict(list)
     for line in lines:
         copy = line.strip()
         (query_seq_name, query_seq_len, query_start, query_end, strand, target_seq_name,
          target_seq_len, target_start, target_end, num_residue_match, align_block_len, map_quality) = copy.split('\t')
-        dst[query_seq_name] += (query_seq_len, query_start, query_end, strand, target_seq_name,
+        dst[query_seq_name].append((query_seq_len, query_start, query_end, strand, target_seq_name,
                                 target_seq_len, target_start, target_end, num_residue_match, align_block_len,
-                                map_quality)
+                                map_quality))
     print(len(dst))
     return dst
 
@@ -67,5 +80,6 @@ if __name__ == '__main__':
 
     reads = get_reads(args.input)
     align_map = parse_paf(args.paf)
-    generate_cigar(align_map, reads)
+    cigars = generate_cigar(align_map, reads)
+    correct_error(cigars, args.output)
     print('Finished')
