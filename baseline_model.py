@@ -7,11 +7,13 @@ from collections import defaultdict
 import argparse
 
 
-def correct_error(cigar_map, out_path):
+def correct_error(cigar_list, out_path):
 
-    for query_read in cigar_map:
-        for cigar in query_read:
-            print(cigar)
+    for query_read in cigar_list:
+        print(query_read) 
+        break
+    #     for cigar in cigar_list[query_read]:
+    #         print(cigar)
     # for record in SeqIO.parse(in_path, file_type):
     #     r = rle(str(record.seq))
     #     sr = SeqRecord(Seq(r))
@@ -19,27 +21,34 @@ def correct_error(cigar_map, out_path):
     #     sr.name = record.name
     #     sr.description = record.description
     #     rles.append(sr)
-    #
-    # SeqIO.write(ec_reads, out_path, 'fasta')
+    for cigar in cigar_list['12_96972_aligned_0_F_20_10782_26']:
+        print(cigar)
+    #SeqIO.write(ec_reads, out_path, 'fasta')
     return None
 
 
 def generate_cigar(align_map, reads):
-    cigar_map = defaultdict(lambda: defaultdict(None))
-    for query_seq in align_map:
-        start = query_seq[0][1]
-        end = query_seq[0][2]
-        exact_query_seq = reads[query_seq][start:end]
-        for target_seq in query_seq:
-            target_name = target_seq[4]
-            target_start = target_seq[6]
-            target_end = target_seq[7]
-            exact_target_seq = reads[target_name][target_start:target_end]
-            cigar = edlib.align(exact_query_seq, exact_target_seq)
-            cigar_map[query_seq] += cigar
+    cigar_list = defaultdict(list)
+    cnt = 0
+    for query_seq in align_map: 
+        # print(cnt)
+        if cnt == 100: break
+        cnt += 1
+        for overlap in align_map[query_seq]:
+            query_start = int (overlap[1])
+            query_end = int (overlap[2])
+            query_overlap = reads[query_seq][query_start:query_end + 1]
+            target_name = overlap[4]
+            target_start = int (overlap[6])
+            target_end = int (overlap[7])
+            target_overlap = reads[target_name][target_start:target_end + 1]
+            # print(len(target_overlap))
+            # print(len(query_overlap))
+            cigar = edlib.align(target_overlap, query_overlap, task = 'path')
+            # cigar_list[query_seq].append(cigar)
 
-    print(len(cigar_map))
-    return cigar_map
+    print(len(cigar_list))
+    return cigar_list
 
 
 def get_reads(input_file):
@@ -49,6 +58,9 @@ def get_reads(input_file):
         file_type = 'fastq'
 
     records = list(SeqIO.parse(input_file, file_type))
+    for i in range(50):
+        print(len(records[i].seq))
+        cigar = edlib.align(records[i].seq, records[i + 1].seq, task = "path")
     records_map = defaultdict(None)
     for record in records:
         records_map[record.name] = record.seq
@@ -62,12 +74,11 @@ def parse_paf(paf_file):
     dst = defaultdict(list)
     for line in lines:
         copy = line.strip()
-        (query_seq_name, query_seq_len, query_start, query_end, strand, target_seq_name,
-         target_seq_len, target_start, target_end, num_residue_match, align_block_len, map_quality) = copy.split('\t')
-        dst[query_seq_name].append((query_seq_len, query_start, query_end, strand, target_seq_name,
-                                target_seq_len, target_start, target_end, num_residue_match, align_block_len,
+        (query_seq_name, query_seq_len, query_start, query_end, strand, overlap_name,
+         overlap_len, target_start, target_end, num_residue_match, align_block_len, map_quality) = copy.split('\t')
+        dst[query_seq_name].append((query_seq_len, query_start, query_end, strand, overlap_name,
+                                overlap_len, target_start, target_end, num_residue_match, align_block_len,
                                 map_quality))
-    print(len(dst))
     return dst
 
 
@@ -79,7 +90,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     reads = get_reads(args.input)
-    align_map = parse_paf(args.paf)
-    cigars = generate_cigar(align_map, reads)
-    correct_error(cigars, args.output)
+    #align_map = parse_paf(args.paf)
+    print("before")
+    # cigars = generate_cigar(align_map, reads)
+    # correct_error(cigars, args.output)
     print('Finished')
