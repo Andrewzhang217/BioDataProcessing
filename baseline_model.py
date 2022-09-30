@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from time import time
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -11,19 +12,20 @@ from concurrent.futures import ProcessPoolExecutor
 import re
 import sys
 
+# total_dels = 0
 
 def correct_error(cigar_list, reads, out_path):
     seq_lst = []
     for target_read in cigar_list:
         # uncorrected
-        ec_read = reads[target_read].seq
+        uncorrected = reads[target_read].seq
         # reads before error correction
         # seq_lst.append(reads[target_read])
-        print(len(ec_read))
+        print(len(uncorrected))
 
         # Add original base into frequency
         freq = []
-        for i, base in enumerate(ec_read):
+        for i, base in enumerate(uncorrected):
             freq.append([])
             freq[i].append(defaultdict(int))
             freq[i][0][base] += 1
@@ -49,7 +51,11 @@ def correct_error(cigar_list, reads, out_path):
                 query_read = query_read.reverse_complement()
                 query_pos = len(query_read) - query_end
                 query_end = len(query_read) - query_start
-
+            # print(f'target_start: {target_start}, target_end:{target_end}')
+            # print(uncorrected[target_start:target_end])
+            # print(f'query_start{query_start}, query_end{query_end}')
+            # print(query_read[query_start:query_end])
+           
             for operation, length in path:
                 if operation == '=' or operation == 'X':
                     for i, b in enumerate(query_read[query_pos:query_pos + length]):
@@ -63,10 +69,11 @@ def correct_error(cigar_list, reads, out_path):
 
                     target_pos += length    
                 elif operation == 'I':
-                    for i, b in enumerate(query_read[query_pos:query_pos + length]):
-                        if i == len(freq[target_pos]):
-                            freq[target_pos].append(defaultdict(int))
-                        freq[target_pos][i][b] += 1
+                    target_tmp_pos = target_pos - 1
+                    for i, b in enumerate(query_read[query_pos:query_pos + length], start=1):
+                        if i == len(freq[target_tmp_pos]):
+                            freq[target_tmp_pos].append(defaultdict(int))
+                        freq[target_tmp_pos][i][b] += 1
 
                     query_pos += length
                 else:
@@ -76,8 +83,9 @@ def correct_error(cigar_list, reads, out_path):
             # assert target_pos == target_end and query_pos == query_end, f'{target_read}, {query_name}'
             # assert target_pos == target_end and query_pos == query_end, f'{path}'
         # generate consensus
-        corrected = generate_consensus(ec_read, freq)
+        corrected = generate_consensus(uncorrected, freq, target_read)
         print(len(corrected))
+        # print(corrected)
         corrected_seq = SeqRecord(Seq(corrected))
         corrected_seq.id = reads[target_read].id
         corrected_seq.name = reads[target_read].name
@@ -87,7 +95,7 @@ def correct_error(cigar_list, reads, out_path):
     SeqIO.write(seq_lst, out_path, 'fasta')
     return None
 
-def generate_consensus(ec_read, freq):
+def generate_consensus(uncorrected, freq, r_id):
     corrected = ''
     # counter = 0
     # dels = 0
@@ -95,8 +103,11 @@ def generate_consensus(ec_read, freq):
     insertions, dels = 0, 0
     for pos in range(len(freq)):
         n_support = sum(freq[pos][0].values())
+
+        if r_id == '6c2efce6-9b99-4126-8444-0f32e8366b1d' and 955 <= len(corrected) < 966:
+            print(freq[pos]) 
         for i in range(len(freq[pos])):
-            if i > 1:
+            if i > 0:
                 freq[pos][i]['D'] = n_support - sum(freq[pos][i].values())
 
             # max_occ = max(freq[pos][i].values(), default=0)
@@ -109,19 +120,19 @@ def generate_consensus(ec_read, freq):
             # print(max_occ)
             if c1 == 0:
                 break
-            if c1 + c2 < 5:
+            if c1 < 5:
                 # #print(cnt)
                 # counter += 1
                 if i == 0:
-                    corrected += ec_read[pos]
-            else :
+                    corrected += uncorrected[pos]
+            else :  # bimodal
                 if c1 <= 1.5 * c2:
                     if i == 0:
-                        corrected += ec_read[pos]
+                        corrected += uncorrected[pos]
                     else:
                         if b1 != 'D':
                             corrected += b1
-                else:
+                else:  # Unimodal
                     if b1 != 'D':
                         if i != 0:
                             insertions += 1
@@ -137,7 +148,7 @@ def generate_cigar(overlap_map, reads):
     cigar_list = defaultdict(list)
     cnt = 0
     for target_seq in overlap_map: 
-        if cnt == 10: break
+        # if cnt == 1: break
         # print(cnt, "#######################")
         cnt += 1
         # print(len(overlap_map[query_seq]))
@@ -162,11 +173,20 @@ def calculate_path(overlap, reads, target_seq):
         query_overlap = reads[query_name].seq[query_start:query_end].reverse_complement()
     else :
         query_overlap = reads[query_name].seq[query_start:query_end]
-    path = edlib.align(query_overlap, target_overlap, task = 'path')['cigar']
+    #path = edlib.align(query_overlap, target_overlap, task = 'path')['cigar']
+    align = edlib.align(query_overlap, target_overlap, task = 'path')
+    path = align['cigar']
+    # distance = align['editDistance']
+    # print(distance/(target_end - target_start) * 100, '%')
     generator = gen(path)
     path = list(generator)
-
+    # dels = sum(i for _, i in path if _ == 'D')
+    # inserts = sum(i for _, i in path if _ == 'I')
+    # total_dels += dels
+    # print(f'deletions: {dels}')
+    # print(f'insertions: {inserts}')
     return target_start, target_end, query_name, query_start, query_end, path, strand
+
 
 REVERSED_OP = {'D': 'I', 'I': 'D', '=': '=', 'X': 'X'}
 def reverse(path):
@@ -186,6 +206,9 @@ def get_reads(input_file):
 
     # records = list(SeqIO.parse(input_file, file_type))
     records_map = SeqIO.to_dict(SeqIO.parse(input_file, file_type))
+    for record in records_map.values():
+        record.seq = record.seq.upper()
+
     return records_map
 
 
@@ -193,11 +216,18 @@ def parse_paf(paf_file):
     overlap_map = defaultdict(list)
     with open(paf_file, 'r') as f:
         for line in f:
-            copy = line.strip()
-            (query_seq_name, _, query_start, query_end, strand, overlap_name,
-            _, target_start, target_end, _, _, _) = copy.split('\t')
+            line = line.strip().split('\t')
+            
+            query_seq_name = line[0]
+            query_start = int(line[2])
+            query_end = int(line[3])
+            strand = line[4] 
+            overlap_name = line[5]
+            target_start = int(line[7])
+            target_end = int(line[8])
+        
             #   parse to correct data type here
-            overlap_map[query_seq_name].append((int(query_start), int(query_end), strand, overlap_name, int(target_start), int(target_end)))
+            overlap_map[query_seq_name].append((query_start, query_end, strand, overlap_name, target_start, target_end))
     
     return overlap_map
 
