@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from asyncio import as_completed
 from time import time
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -9,91 +10,95 @@ from collections import defaultdict, Counter
 import time
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import as_completed
+import itertools
 import re
 import sys
 
-# total_dels = 0
+class CustomSeqRecord:
+    def __init__(self, name, id, description, seq):
+        self.name = name
+        self.id = id
+        self.description = description
+        self.seq = seq
+        self.REVERSED_BASE = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
 
-def correct_error(cigar_list, reads, out_path):
-    seq_lst = []
-    for target_read in cigar_list:
-        # uncorrected
-        uncorrected = reads[target_read].seq
-        # reads before error correction
-        # seq_lst.append(reads[target_read])
-        print(len(uncorrected))
+    def reverse_complement(self):
 
-        # Add original base into frequency
-        freq = []
-        for i, base in enumerate(uncorrected):
-            freq.append([])
-            freq[i].append(defaultdict(int))
-            freq[i][0][base] += 1
-    
+        result = [(self.REVERSED_BASE[base]) for base in reversed(self.seq)]
+        return result
 
-        # freq of A C G T and D at each base
-        for target_start, target_end, query_name, query_start, query_end, path, strand in cigar_list[target_read]:
-            # sr = SeqRecord(reads[query_name].seq)
-            # sr.id = reads[query_name].id
-            # sr.name = reads[query_name].name
-            # sr.description = reads[query_name].description
-            # seq_lst.append(sr)
-            cnt = 0
-            # reverse complement
-            # recalculate the query start and end in case of RC
-            # rc_start = len - end - 1
-            # rc_end = len - start
-            target_pos = target_start
-            query_pos = query_start
-            query_read = reads[query_name].seq
+def correct_error(reads, target_read, lstDict):
 
-            if strand == '-':
-                query_read = query_read.reverse_complement()
-                query_pos = len(query_read) - query_end
-                query_end = len(query_read) - query_start
-            # print(f'target_start: {target_start}, target_end:{target_end}')
-            # print(uncorrected[target_start:target_end])
-            # print(f'query_start{query_start}, query_end{query_end}')
-            # print(query_read[query_start:query_end])
-           
-            for operation, length in path:
-                if operation == '=' or operation == 'X':
-                    for i, b in enumerate(query_read[query_pos:query_pos + length]):
-                        freq[target_pos+i][0][b] += 1
-                    
-                    target_pos += length
-                    query_pos += length
-                elif operation == 'D':
-                    for i in range(target_pos, target_pos + length):
-                        freq[i][0]['D'] += 1
+    # uncorrected
+    uncorrected = reads[target_read].seq
+    # reads before error correction
+    # seq_lst.append(reads[target_read])
+    print(len(uncorrected))
 
-                    target_pos += length    
-                elif operation == 'I':
-                    target_tmp_pos = target_pos - 1
-                    for i, b in enumerate(query_read[query_pos:query_pos + length], start=1):
-                        if i == len(freq[target_tmp_pos]):
-                            freq[target_tmp_pos].append(defaultdict(int))
-                        freq[target_tmp_pos][i][b] += 1
+    # Add original base into frequency
+    freq = []
+    for i, base in enumerate(uncorrected):
+        freq.append([])
+        freq[i].append(defaultdict(int))
+        freq[i][0][base] += 1
 
-                    query_pos += length
-                else:
-                    raise ValueError(f'{operation} - Invalid CIGAR operation.')  
-            # assert pointers are at the end
-            assert target_pos == target_end and query_pos == query_end, f'{target_start}, {target_pos}, {target_end}, {query_start}, {query_pos}, {query_end}, {strand}'
-            # assert target_pos == target_end and query_pos == query_end, f'{target_read}, {query_name}'
-            # assert target_pos == target_end and query_pos == query_end, f'{path}'
-        # generate consensus
-        corrected = generate_consensus(uncorrected, freq, target_read)
-        print(len(corrected))
-        # print(corrected)
-        corrected_seq = SeqRecord(Seq(corrected))
-        corrected_seq.id = reads[target_read].id
-        corrected_seq.name = reads[target_read].name
-        corrected_seq.description = reads[target_read].description
-        seq_lst.append(corrected_seq)
-    print(len(seq_lst))    
-    SeqIO.write(seq_lst, out_path, 'fasta')
-    return None
+
+    # freq of A C G T and D at each base
+    for target_start, target_end, query_name, query_start, query_end, path, strand in lstDict:
+        # sr = SeqRecord(reads[query_name].seq)
+        # sr.id = reads[query_name].id
+        # sr.name = reads[query_name].name
+        # sr.description = reads[query_name].description
+        # seq_lst.append(sr)
+        cnt = 0
+        # reverse complement
+        # recalculate the query start and end in case of RC
+        # rc_start = len - end - 1
+        # rc_end = len - start
+        target_pos = target_start
+        query_pos = query_start
+        query_read = reads[query_name].seq
+
+        if strand == '-':
+            query_read = query_read.reverse_complement()
+            query_pos = len(query_read) - query_end
+            query_end = len(query_read) - query_start
+        # print(f'target_start: {target_start}, target_end:{target_end}')
+        # print(uncorrected[target_start:target_end])
+        # print(f'query_start{query_start}, query_end{query_end}')
+        # print(query_read[query_start:query_end])
+        
+        for operation, length in path:
+            if operation == '=' or operation == 'X':
+                for i, b in enumerate(query_read[query_pos:query_pos + length]):
+                    freq[target_pos+i][0][b] += 1
+                
+                target_pos += length
+                query_pos += length
+            elif operation == 'D':
+                for i in range(target_pos, target_pos + length):
+                    freq[i][0]['D'] += 1
+
+                target_pos += length    
+            elif operation == 'I':
+                target_tmp_pos = target_pos - 1
+                for i, b in enumerate(query_read[query_pos:query_pos + length], start=1):
+                    if i == len(freq[target_tmp_pos]):
+                        freq[target_tmp_pos].append(defaultdict(int))
+                    freq[target_tmp_pos][i][b] += 1
+
+                query_pos += length
+            else:
+                raise ValueError(f'{operation} - Invalid CIGAR operation.')  
+        # assert pointers are at the end
+        assert target_pos == target_end and query_pos == query_end, f'{target_start}, {target_pos}, {target_end}, {query_start}, {query_pos}, {query_end}, {strand}'
+        # assert target_pos == target_end and query_pos == query_end, f'{target_read}, {query_name}'
+        # assert target_pos == target_end and query_pos == query_end, f'{path}'
+    # generate consensus
+    corrected = generate_consensus(uncorrected, freq, target_read)
+    return corrected
+        
 
 def generate_consensus(uncorrected, freq, r_id):
     corrected = ''
@@ -104,8 +109,8 @@ def generate_consensus(uncorrected, freq, r_id):
     for pos in range(len(freq)):
         n_support = sum(freq[pos][0].values())
 
-        if r_id == '6c2efce6-9b99-4126-8444-0f32e8366b1d' and 955 <= len(corrected) < 966:
-            print(freq[pos]) 
+        # if r_id == '6c2efce6-9b99-4126-8444-0f32e8366b1d' and 955 <= len(corrected) < 966:
+        #     print(freq[pos]) 
         for i in range(len(freq[pos])):
             if i > 0:
                 freq[pos][i]['D'] = n_support - sum(freq[pos][i].values())
@@ -170,7 +175,8 @@ def calculate_path(overlap, reads, target_seq):
     query_start = overlap[4]
     query_end = overlap[5]
     if strand == '-':
-        query_overlap = reads[query_name].seq[query_start:query_end].reverse_complement()
+        # query_overlap = reads[query_name].seq[query_start:query_end].reverse_complement()
+        query_overlap = reads[query_name].reverse_complement()[query_start:query_end]
     else :
         query_overlap = reads[query_name].seq[query_start:query_end]
     #path = edlib.align(query_overlap, target_overlap, task = 'path')['cigar']
@@ -203,13 +209,15 @@ def get_reads(input_file):
     file_type = file_type[1:]
     if file_type in ['fq']:
         file_type = 'fastq'
-
+    
+    records_map = {}
     # records = list(SeqIO.parse(input_file, file_type))
-    records_map = SeqIO.to_dict(SeqIO.parse(input_file, file_type))
-    for record in records_map.values():
+    for record in SeqIO.parse(input_file, file_type):
         record.seq = record.seq.upper()
+        records_map[record.id] = CustomSeqRecord(record.name, record.id, record.description, record.seq)
 
-    return records_map
+    print("size: ", len(records_map))
+    return records_map # Dict[str, SeqRecord] Dict[str, Andrews_SeqRecord]
 
 
 def parse_paf(paf_file):
@@ -237,15 +245,63 @@ def parse_args():
     parser.add_argument('-i', '--input', type=str, help='path of the input FASTA/Q file.')
     parser.add_argument('-p', '--paf', type=str, help='path of the input PAF file.')
     parser.add_argument('-o', '--output', type=str, help='path of error corrected reads file')
+    parser.add_argument('-t', '--thread', type=int, help='number of threads(processes actually')
     args = parser.parse_args()
     return args
+
+def chunks(data, size):
+    it = iter(data)
+    for i in range(0, len(data), size):
+        yield {k: data[k] for k in itertools.islice(it, size)}
 
 
 def main(args):
     reads = get_reads(args.input)
     overlap_map = parse_paf(args.paf)
-    cigars = generate_cigar(overlap_map, reads)
-    correct_error(cigars, reads, args.output)
+    print("finish parsing")
+    seq_lst = [] 
+    workers = args.thread
+    # chunked_list = list()
+    # chunk_size = int (len(overlap_map) / args.thread)
+    # for i in range(0, len(overlap_map), chunk_size):
+    #     chunked_list.append(overlap_map[i : i + chunk_size])
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        # cigar_list = {executor.map(generate_cigar, overlap_map_chunk, reads) : overlap_map_chunk for overlap_map_chunk in chunked_list}
+        futures_cigar = []
+        # step = max(1, int(len(overlap_map) / workers))
+        step = int(len(overlap_map) / workers)
+        # for chunk in chunks(overlap_map, step):
+        #     print(type(chunk), len(chunk))
+        overlap_keys = list(overlap_map)
+        overlap_list = overlap_map.items()
+        for i in range(0, len(overlap_list), step):
+            end = min(i + step, len(overlap_list))
+            curr_dict = {k : overlap_map[k] for k in overlap_keys[i : end]}
+            f = executor.submit(generate_cigar, curr_dict, reads)
+            # print(f.result())
+            futures_cigar.append(f)
+
+        # for i in range(0, len(overlap_map), step):
+        #     end = min(i + step, len(overlap_map))
+        for result in as_completed(futures_cigar):
+            result = result.result()
+            # print(result)
+            for target_read in result:
+                corrected = correct_error(reads, target_read, result[target_read])
+                corrected_seq = SeqRecord(Seq(corrected))
+                corrected_seq.id = reads[target_read].id
+                corrected_seq.name = reads[target_read].name
+                corrected_seq.description = reads[target_read].description
+                seq_lst.append(corrected_seq)        
+
+       #     for target_read in cigar_list:
+    #         corrected = correct_error(reads, target_read, cigar_list[target_read])
+        print("futures:", len(futures_cigar))
+    # 
+
+    print(len(seq_lst))    
+    SeqIO.write(seq_lst, args.output, 'fasta')
+
 
 
 if __name__ == '__main__':
