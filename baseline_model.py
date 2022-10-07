@@ -154,15 +154,15 @@ def generate_consensus(uncorrected, freq, r_id):
 def generate_cigar(overlap_map, reads):
     cigar_list = defaultdict(list)
     cnt = 0
-    for target_seq in overlap_map: 
+    for target_name in overlap_map: 
         # if cnt == 1: break
         # print(cnt, "#######################")
         cnt += 1
         # print(len(overlap_map[query_seq]))
-        for overlap in overlap_map[target_seq]:
-            aligned_overlap = calculate_path(overlap, reads, target_seq)
+        for overlap in overlap_map[target_name]:
+            aligned_overlap = calculate_path(overlap, reads, target_name)
             if aligned_overlap is not None:
-                cigar_list[target_seq].append(aligned_overlap)
+                cigar_list[target_name].append(aligned_overlap)
             else:
                 pass
                 #print(target_seq, overlap)
@@ -171,27 +171,24 @@ def generate_cigar(overlap_map, reads):
 
     return cigar_list
 
-def calculate_path(overlap, reads, target_seq):
+def calculate_path(overlap, reads, target_name):
     target_start = overlap[0]
     target_end = overlap[1]
-    target_overlap = reads[target_seq].seq[target_start:target_end]
-    # check paf convention of end
+    target_read = reads[target_name].seq[target_start:target_end]
     strand = overlap[2]
     query_name = overlap[3]
     query_start = overlap[4]
     query_end = overlap[5]
     if strand == '-':
-        # query_overlap = reads[query_name].seq[query_start:query_end].reverse_complement()
-        query_overlap = reads[query_name].reverse_complement()[query_start:query_end]
+        query_read = reads[query_name].reverse_complement()[query_start:query_end]
     else :
-        query_overlap = reads[query_name].seq[query_start:query_end]
-    #path = edlib.align(query_overlap, target_overlap, task = 'path')['cigar']
-    align = edlib.align(query_overlap, target_overlap, task = 'path')
+        query_read = reads[query_name].seq[query_start:query_end]
+    align = edlib.align(query_read, target_read, task = 'path')
     path = align['cigar']
     # distance = align['editDistance']
     # print(distance/(target_end - target_start) * 100, '%')
     if path is None:
-        print(target_seq, query_name, query_overlap, target_overlap.lower())
+        print(target_name, query_name, query_read, target_read.lower())
         return None
 
     generator = gen(path)
@@ -274,17 +271,10 @@ def main(args):
     print("finish parsing")
     seq_lst = [] 
     workers = args.thread
-    # chunked_list = list()
-    # chunk_size = int (len(overlap_map) / args.thread)
-    # for i in range(0, len(overlap_map), chunk_size):
-    #     chunked_list.append(overlap_map[i : i + chunk_size])
+    
     with ProcessPoolExecutor(max_workers=workers) as executor, Manager() as manager:
-        # cigar_list = {executor.map(generate_cigar, overlap_map_chunk, reads) : overlap_map_chunk for overlap_map_chunk in chunked_list}
         futures_cigar = []
-        # step = max(1, int(len(overlap_map) / workers))
         step = int(len(overlap_map) / workers)
-        # for chunk in chunks(overlap_map, step):
-        #     print(type(chunk), len(chunk))
         overlap_keys = list(overlap_map)
         overlap_list = overlap_map.items()
         managed_reads = manager.dict(reads)
@@ -297,8 +287,7 @@ def main(args):
             futures_cigar.append(f)
         print('gotov')
 
-        # for i in range(0, len(overlap_map), step):
-        #     end = min(i + step, len(overlap_map))
+        
         for result in as_completed(futures_cigar):
             print('ovdje')
             result = result.result()
@@ -311,10 +300,7 @@ def main(args):
                 corrected_seq.description = reads[target_read].description
                 seq_lst.append(corrected_seq)        
 
-       #     for target_read in cigar_list:
-    #         corrected = correct_error(reads, target_read, cigar_list[target_read])
-        print("futures:", len(futures_cigar))
-    # 
+        print("futures:", len(futures_cigar)) 
 
     print(len(seq_lst))    
     SeqIO.write(seq_lst, args.output, 'fasta')
