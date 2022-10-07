@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from asyncio import as_completed
+import multiprocessing
 from time import time
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -9,6 +10,7 @@ from pathlib import Path
 from collections import defaultdict, Counter
 import time
 import argparse
+from multiprocessing import set_start_method, Manager
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import as_completed
 import itertools
@@ -16,16 +18,16 @@ import re
 import sys
 
 class CustomSeqRecord:
+    RC_BASE = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+    
     def __init__(self, name, id, description, seq):
         self.name = name
         self.id = id
         self.description = description
         self.seq = seq
-        self.REVERSED_BASE = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
-
+        
     def reverse_complement(self):
-
-        result = [(self.REVERSED_BASE[base]) for base in reversed(self.seq)]
+        result = ''.join([(self.RC_BASE[base]) for base in reversed(self.seq)])
         return result
 
 def correct_error(reads, target_read, lstDict):
@@ -158,8 +160,12 @@ def generate_cigar(overlap_map, reads):
         cnt += 1
         # print(len(overlap_map[query_seq]))
         for overlap in overlap_map[target_seq]:
-            (target_start, target_end, query_name, query_start, query_end, path, strand) = calculate_path(overlap, reads, target_seq)
-            cigar_list[target_seq].append((target_start, target_end, query_name, query_start, query_end, path, strand))
+            aligned_overlap = calculate_path(overlap, reads, target_seq)
+            if aligned_overlap is not None:
+                cigar_list[target_seq].append(aligned_overlap)
+            else:
+                pass
+                #print(target_seq, overlap)
             # reverse_cigar = (query_start, query_end, target_seq, target_start, target_end, reverse(path), strand)
             # cigar_list[query_name].append(reverse_cigar)
 
@@ -184,6 +190,10 @@ def calculate_path(overlap, reads, target_seq):
     path = align['cigar']
     # distance = align['editDistance']
     # print(distance/(target_end - target_start) * 100, '%')
+    if path is None:
+        print(target_seq, query_name, query_overlap, target_overlap.lower())
+        return None
+
     generator = gen(path)
     path = list(generator)
     # dels = sum(i for _, i in path if _ == 'D')
@@ -213,6 +223,9 @@ def get_reads(input_file):
     records_map = {}
     # records = list(SeqIO.parse(input_file, file_type))
     for record in SeqIO.parse(input_file, file_type):
+        underscore_idx = record.id.index('_')
+        record.id = record.id[:underscore_idx]
+
         record.seq = record.seq.upper()
         records_map[record.id] = CustomSeqRecord(record.name, record.id, record.description, record.seq)
 
@@ -265,7 +278,7 @@ def main(args):
     # chunk_size = int (len(overlap_map) / args.thread)
     # for i in range(0, len(overlap_map), chunk_size):
     #     chunked_list.append(overlap_map[i : i + chunk_size])
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=workers) as executor, Manager() as manager:
         # cigar_list = {executor.map(generate_cigar, overlap_map_chunk, reads) : overlap_map_chunk for overlap_map_chunk in chunked_list}
         futures_cigar = []
         # step = max(1, int(len(overlap_map) / workers))
@@ -274,16 +287,20 @@ def main(args):
         #     print(type(chunk), len(chunk))
         overlap_keys = list(overlap_map)
         overlap_list = overlap_map.items()
+        managed_reads = manager.dict(reads)
         for i in range(0, len(overlap_list), step):
             end = min(i + step, len(overlap_list))
             curr_dict = {k : overlap_map[k] for k in overlap_keys[i : end]}
-            f = executor.submit(generate_cigar, curr_dict, reads)
+            print(i)
+            f = executor.submit(generate_cigar, curr_dict, managed_reads)
             # print(f.result())
             futures_cigar.append(f)
+        print('gotov')
 
         # for i in range(0, len(overlap_map), step):
         #     end = min(i + step, len(overlap_map))
         for result in as_completed(futures_cigar):
+            print('ovdje')
             result = result.result()
             # print(result)
             for target_read in result:
@@ -305,6 +322,7 @@ def main(args):
 
 
 if __name__ == '__main__':
+    set_start_method('forkserver')
    
     args = parse_args()
     
