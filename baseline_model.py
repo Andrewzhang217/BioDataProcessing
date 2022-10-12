@@ -16,6 +16,18 @@ from concurrent.futures import as_completed
 import itertools
 import re
 import sys
+from functools import wraps
+
+# def fn_timer(function):
+#     @wraps(function)
+#     def function_timer(*args, **kwargs):
+#         start_time = time.time()
+#         result = function(*args, **kwargs)
+#         end_time = time.time()
+#         print(f"Runtime of {function.__name__} is {end_time - start_time:.04} seconds")
+#         return result
+#     return function_timer    
+    
 
 class CustomSeqRecord:
     RC_BASE = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
@@ -30,13 +42,14 @@ class CustomSeqRecord:
         result = ''.join([(self.RC_BASE[base]) for base in reversed(self.seq)])
         return result
 
+# @fn_timer
 def correct_error(reads, target_read, lstDict):
 
     # uncorrected
     uncorrected = reads[target_read].seq
     # reads before error correction
     # seq_lst.append(reads[target_read])
-    print(len(uncorrected))
+    # print(len(uncorrected))
 
     # Add original base into frequency
     freq = []
@@ -60,10 +73,10 @@ def correct_error(reads, target_read, lstDict):
         # rc_end = len - start
         target_pos = target_start
         query_pos = query_start
-        query_read = reads[query_name].seq
-
+        query_seq_record = reads[query_name]
+        query_read = query_seq_record.seq
         if strand == '-':
-            query_read = query_read.reverse_complement()
+            query_read = query_seq_record.reverse_complement()
             query_pos = len(query_read) - query_end
             query_end = len(query_read) - query_start
         # print(f'target_start: {target_start}, target_end:{target_end}')
@@ -101,7 +114,7 @@ def correct_error(reads, target_read, lstDict):
     corrected = generate_consensus(uncorrected, freq, target_read)
     return corrected
         
-
+# @fn_timer
 def generate_consensus(uncorrected, freq, r_id):
     corrected = ''
     # counter = 0
@@ -148,9 +161,11 @@ def generate_consensus(uncorrected, freq, r_id):
                         if i == 0:
                             dels += 1
 
-    print("insert" , insertions, dels)                    
+    # print("insert" , insertions, dels)                    
     return corrected
 
+
+# @fn_timer
 def generate_cigar(overlap_map, reads):
     cigar_list = defaultdict(list)
     cnt = 0
@@ -171,6 +186,8 @@ def generate_cigar(overlap_map, reads):
 
     return cigar_list
 
+
+# @fn_timer
 def calculate_path(overlap, reads, target_name):
     target_start = overlap[0]
     target_end = overlap[1]
@@ -210,7 +227,6 @@ def gen(string):
     for match in pattern.finditer(string):
         yield match.group(2), int(match.group(1))
 
-
 def get_reads(input_file):
     file_type = Path(input_file).suffix
     file_type = file_type[1:]
@@ -222,30 +238,34 @@ def get_reads(input_file):
     for record in SeqIO.parse(input_file, file_type):
         underscore_idx = record.id.index('_')
         record.id = record.id[:underscore_idx]
-
-        record.seq = record.seq.upper()
+        
+        record.seq = str(record.seq).upper()
         records_map[record.id] = CustomSeqRecord(record.name, record.id, record.description, record.seq)
 
     print("size: ", len(records_map))
-    return records_map # Dict[str, SeqRecord] Dict[str, Andrews_SeqRecord]
+    return records_map 
 
-
+# @fn_timer
 def parse_paf(paf_file):
     overlap_map = defaultdict(list)
     with open(paf_file, 'r') as f:
         for line in f:
             line = line.strip().split('\t')
             
-            query_seq_name = line[0]
+            query_name = line[0]
+            underscore_idx = query_name.index('_')
+            query_name = query_name[:underscore_idx]
             query_start = int(line[2])
             query_end = int(line[3])
             strand = line[4] 
-            overlap_name = line[5]
+            target_name = line[5]
+            underscore_idx = target_name.index('_')
+            target_name = target_name[:underscore_idx]
             target_start = int(line[7])
             target_end = int(line[8])
         
             #   parse to correct data type here
-            overlap_map[query_seq_name].append((query_start, query_end, strand, overlap_name, target_start, target_end))
+            overlap_map[query_name].append((query_start, query_end, strand, target_name, target_start, target_end))
     
     return overlap_map
 
@@ -259,52 +279,82 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def chunks(data, size):
-    it = iter(data)
-    for i in range(0, len(data), size):
-        yield {k: data[k] for k in itertools.islice(it, size)}
+
+def generate_cigar_correct_error(overlap_map, reads):
+    cigar_list = generate_cigar(overlap_map, reads)
+    seq_lst = []
+    for target_read in cigar_list:
+        corrected = correct_error(reads, target_read, cigar_list[target_read])
+        corrected_seq = SeqRecord(Seq(corrected))
+        corrected_seq.id = reads[target_read].id
+        corrected_seq.name = reads[target_read].name
+        corrected_seq.description = reads[target_read].description
+        seq_lst.append(corrected_seq) 
+
+    return seq_lst          
 
 
 def main(args):
     reads = get_reads(args.input)
     overlap_map = parse_paf(args.paf)
     print("finish parsing")
-    seq_lst = [] 
     workers = args.thread
+    seq_lst = []
+    futures_ec_reads = []
+    overlap_keys = list(overlap_map)
+    overlap_list = overlap_map.items()
     
-    with ProcessPoolExecutor(max_workers=workers) as executor, Manager() as manager:
-        futures_cigar = []
-        step = int(len(overlap_map) / workers)
-        overlap_keys = list(overlap_map)
-        overlap_list = overlap_map.items()
+    with Manager() as manager, ProcessPoolExecutor(max_workers=workers) as executor:
+        # step = int(len(overlap_map) / workers)
+        step = 10
         managed_reads = manager.dict(reads)
+        # for i in range(0, 1000, step):
         for i in range(0, len(overlap_list), step):
             end = min(i + step, len(overlap_list))
             curr_dict = {k : overlap_map[k] for k in overlap_keys[i : end]}
-            print(i)
-            f = executor.submit(generate_cigar, curr_dict, managed_reads)
-            # print(f.result())
-            futures_cigar.append(f)
-        print('gotov')
+            f = executor.submit(generate_cigar_correct_error, curr_dict, managed_reads)
+            futures_ec_reads.append(f)
+
+        for result in as_completed(futures_ec_reads):
+            # pass
+            seq_lst.extend(result.result())
+            # print("number of corrected reads: ", len(seq_lst))
+        # for i in range(0, len(overlap_list), step):
+        #     end = min(i + step, len(overlap_list))
+        #     curr_dict = {k : overlap_map[k] for k in overlap_keys[i : end]}
+        #     f = executor.submit(generate_cigar, curr_dict, managed_reads)
+        #     # print(f.result())
+        #     futures_cigar.append(f)
+        # print(f'All jobs {len(futures_cigar)} have been submitted.')
 
         
-        for result in as_completed(futures_cigar):
-            print('ovdje')
-            result = result.result()
-            # print(result)
-            for target_read in result:
-                corrected = correct_error(reads, target_read, result[target_read])
-                corrected_seq = SeqRecord(Seq(corrected))
-                corrected_seq.id = reads[target_read].id
-                corrected_seq.name = reads[target_read].name
-                corrected_seq.description = reads[target_read].description
-                seq_lst.append(corrected_seq)        
+        # for result in as_completed(futures_cigar):
+        #     print('ovdje')
+        #     result = result.result()
+        #     # print(result)
+        #     for target_read in result:
+        #         corrected = correct_error(reads, target_read, result[target_read])
+        #         corrected_seq = SeqRecord(Seq(corrected))
+        #         corrected_seq.id = reads[target_read].id
+        #         corrected_seq.name = reads[target_read].name
+        #         corrected_seq.description = reads[target_read].description
+        #         seq_lst.append(corrected_seq)        
 
-        print("futures:", len(futures_cigar)) 
+        # print("futures:", len(futures_cigar)) 
 
-    print(len(seq_lst))    
+    # print(len(seq_lst))    
     SeqIO.write(seq_lst, args.output, 'fasta')
 
+
+def wrapper():
+    set_start_method('forkserver')
+   
+    args = parse_args()
+    
+    t1 = time.time()
+    main(args)
+    t2 = time.time()
+    print('Time elapsed: ', t2 - t1)
 
 
 if __name__ == '__main__':
