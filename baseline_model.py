@@ -16,17 +16,7 @@ from concurrent.futures import as_completed
 import itertools
 import re
 import sys
-from functools import wraps
-
-# def fn_timer(function):
-#     @wraps(function)
-#     def function_timer(*args, **kwargs):
-#         start_time = time.time()
-#         result = function(*args, **kwargs)
-#         end_time = time.time()
-#         print(f"Runtime of {function.__name__} is {end_time - start_time:.04} seconds")
-#         return result
-#     return function_timer    
+from functools import wraps  
     
 
 class CustomSeqRecord:
@@ -42,7 +32,7 @@ class CustomSeqRecord:
         result = ''.join([(self.RC_BASE[base]) for base in reversed(self.seq)])
         return result
 
-# @fn_timer
+
 def correct_error(reads, target_read, lstDict):
 
     # uncorrected
@@ -113,8 +103,8 @@ def correct_error(reads, target_read, lstDict):
     # generate consensus
     corrected = generate_consensus(uncorrected, freq, target_read)
     return corrected
-        
-# @fn_timer
+
+
 def generate_consensus(uncorrected, freq, r_id):
     corrected = ''
     # counter = 0
@@ -165,7 +155,6 @@ def generate_consensus(uncorrected, freq, r_id):
     return corrected
 
 
-# @fn_timer
 def generate_cigar(overlap_map, reads):
     cigar_list = defaultdict(list)
     cnt = 0
@@ -187,7 +176,6 @@ def generate_cigar(overlap_map, reads):
     return cigar_list
 
 
-# @fn_timer
 def calculate_path(overlap, reads, target_name):
     target_start = overlap[0]
     target_end = overlap[1]
@@ -245,7 +233,7 @@ def get_reads(input_file):
     print("size: ", len(records_map))
     return records_map 
 
-# @fn_timer
+
 def parse_paf(paf_file):
     overlap_map = defaultdict(list)
     with open(paf_file, 'r') as f:
@@ -318,31 +306,6 @@ def main(args):
         for result in as_completed(futures_ec_reads):
             # pass
             seq_lst.extend(result.result())
-            # print("number of corrected reads: ", len(seq_lst))
-        # for i in range(0, len(overlap_list), step):
-        #     end = min(i + step, len(overlap_list))
-        #     curr_dict = {k : overlap_map[k] for k in overlap_keys[i : end]}
-        #     f = executor.submit(generate_cigar, curr_dict, managed_reads)
-        #     # print(f.result())
-        #     futures_cigar.append(f)
-        # print(f'All jobs {len(futures_cigar)} have been submitted.')
-
-        
-        # for result in as_completed(futures_cigar):
-        #     print('ovdje')
-        #     result = result.result()
-        #     # print(result)
-        #     for target_read in result:
-        #         corrected = correct_error(reads, target_read, result[target_read])
-        #         corrected_seq = SeqRecord(Seq(corrected))
-        #         corrected_seq.id = reads[target_read].id
-        #         corrected_seq.name = reads[target_read].name
-        #         corrected_seq.description = reads[target_read].description
-        #         seq_lst.append(corrected_seq)        
-
-        # print("futures:", len(futures_cigar)) 
-
-    # print(len(seq_lst))    
     SeqIO.write(seq_lst, args.output, 'fasta')
 
 
