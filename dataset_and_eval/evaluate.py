@@ -3,7 +3,7 @@
 import argparse
 from Bio import SeqIO
 import configparser
-from dgenies_plot import startup, wait_for_download, init_driver, plot
+from dgenies_plot import startup, init_driver, plot
 from haplotype_info import separate_reads_to_files
 from pathlib import Path
 import os
@@ -89,7 +89,7 @@ def evaluate_reads_quality(reads_path, ref1_path, ref2_path, name1, name2, num_t
     stats2 = basic_acc_stats(sam2_path)
     print(f'For {name1}:', file=print_to_handle)
     print_basic_acc_stats(stats1, print_to_handle=print_to_handle)
-    print(f'For {name1}:', file=print_to_handle)
+    print(f'For {name2}:', file=print_to_handle)
     print_basic_acc_stats(stats2, print_to_handle=print_to_handle)
 
 def assemble_hifiasm(path_to_reads, number_of_threads, output_prefix, reuse):
