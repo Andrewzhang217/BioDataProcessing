@@ -2,7 +2,7 @@
 
 import argparse
 from Bio import SeqIO
-from check_assembly import get_diff
+from check_alignment import get_diff_with_assm
 from collections import namedtuple
 import os.path
 from pathlib import Path
@@ -11,9 +11,14 @@ import subprocess
 import sys
 
 '''
-Do slicing and modifications of assembly.
+Do slicing and modifications of assembly. Allows specification of the minimap2 binary to use 
+since the one found in PATH may not be of the intended version.
 
+* An assembly with variations from the reference would have a lot of soft-clips/chimeric mappings 
+w.r.t. ref. Possibility of using these parts to fix HP lengths.
 * Merging diffs that are close together may be a thing worth having?
+*argparse - Should put required=True for inputs that are required.
+* For assm to ref alignment, maybe need chunking
 '''
 '''
 A namedtuple representing a difference between the assembly and reference.
@@ -47,6 +52,7 @@ TYPE_MIS = 4
 TYPE_HP = 5
 TYPE_NONE = 6
 TYPE_CLEAR = 7
+
 
 '''
 Gives list of differences between query and ref.
@@ -129,10 +135,14 @@ for assm2ref
 Input: A list of diff namedtuples
 Output: A list of operations to modify the contig
 '''
-def make_operations(diffs, is_reverse, contig_len, skip_mismatch=False, fix_HP=False):
+def make_operations(diffs, is_reverse, contig_len, skip_mismatch=False, fix_HP=False, no_trim=False):
     ls = []
+    if no_trim and not fix_HP:
+        return ls
     if is_reverse:
         for diff in diffs:
+            if no_trim and not diff.type == CODE_HP:
+                continue
             pos = contig_len - 1 - diff.pos
             # recheck all cases
             if diff.type == CODE_HP:
@@ -156,6 +166,8 @@ def make_operations(diffs, is_reverse, contig_len, skip_mismatch=False, fix_HP=F
                 print('STH WRONG')
     else:
         for diff in diffs:
+            if no_trim and not diff.type == CODE_HP:
+                continue
             if diff.type == CODE_HP:
                 if fix_HP:
                     ls.append(operation(diff.pos, OP_INS, diff.len, diff.chunk))
@@ -263,7 +275,7 @@ Modify assembly according to its differences with the reference.
 contigs: dictionary of fasta records in assembly
 diffs: dictionary of contig_name : (is_reverse, list of diffs) 
 '''
-def modify_assembly(contigs, diffs_assm2ref, r2assm, skip_mismatch=False, fix_HP=False):
+def modify_assembly(contigs, diffs_assm2ref, r2assm, skip_mismatch=False, fix_HP=False, ref_no_trim=False):
     #records =  SeqIO.index(assm_path, 'fasta')
     for contig_name, record in contigs.items():
         ops1 = [] # from assm2ref 
@@ -272,11 +284,11 @@ def modify_assembly(contigs, diffs_assm2ref, r2assm, skip_mismatch=False, fix_HP
             diff_tuple = diffs_assm2ref[contig_name]
             is_reverse = diff_tuple[0]
             differences = diff_tuple[1]
-            ops1 = make_operations(differences, is_reverse, len(record), skip_mismatch, fix_HP)
+            ops1 = make_operations(differences, is_reverse, len(record), skip_mismatch, fix_HP, ref_no_trim)
         if r2assm != None:
-            diffs = get_diff(r2assm, contig_name, str(record.seq), len(record), 20, 5, 0.4, True)
+            diffs = get_diff_with_assm(r2assm, contig_name, str(record.seq), len(record), 20, 5, 0.4, True)
             if diffs[0][1] == TYPE_NONE:
-                print(contig_name + 'has no qualified reads aligned', sys.stderr)
+                print(contig_name + ' has no qualified reads aligned', file=sys.stderr)
                 continue
             if diffs[0][1] == TYPE_CLEAR:
                 diffs.clear() # no problem with this contig
@@ -301,17 +313,19 @@ def modify_assembly(contigs, diffs_assm2ref, r2assm, skip_mismatch=False, fix_HP
 '''
 returns sam_path
 '''
-def align_assm2ref(assm_path, ref_path, num_threads, force):
-    assm_dir = os.path.dirname(assm_path)
-    if assm_dir != '':
-        assm_dir += '/' 
-    sam_path =  assm_dir + Path(assm_path).stem + '2' + Path(ref_path).stem + '.sam'
+def align_assm2ref(assm_path, ref_path, num_threads, force, path):
+    #assm_dir = os.path.dirname(assm_path)
+    #if assm_dir != '':
+    #    assm_dir += '/' 
+    if path == None:
+        path = 'minimap2'
+    sam_path =  'TRIM_'+ Path(assm_path).stem + '2' + Path(ref_path).stem + '.sam'
     if force:
         subprocess.run(['rm', sam_path])
     already_has_sam = os.path.exists(sam_path)
     if not already_has_sam:
         with open(sam_path, 'w') as sam_file:
-            subprocess.run(['minimap2', '-x', 'asm5', '--secondary=no', '-L', '-a', '--eqx', '-t', \
+            subprocess.run([path, '-x', 'asm5', '--secondary=no', '-L', '-a', '--eqx', '-t', \
                 str(num_threads), ref_path, assm_path], stdout=sam_file)
     else:
         print(sam_path + ' exists, using.', file=sys.stderr)
@@ -321,18 +335,21 @@ def align_assm2ref(assm_path, ref_path, num_threads, force):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Compare assembly with reference/reads.')
+    
+    parser = argparse.ArgumentParser(description='Compare assembly with reference/reads and do trimming.')
     parser.add_argument('-i', '--assm', type=str, help='path of the assembly.')
     parser.add_argument('-r', '--ref', type=str, default=None, help='path of the reference fasta.')
     parser.add_argument('--rd', type=str, default=None, help='Reads to assembly bam.')
     #parser.add_argument('-o', '--output', type=str, help='path of the output assembly fasta.')
     parser.add_argument('-t', '--num_threads', type=str, help='number of threads to use.')
     parser.add_argument('-f', action='store_true', help='force creation of sam.')
+    parser.add_argument('-p', '--path', type=str, default=None, help='path of the minimap2 to be used.')
     args = parser.parse_args()
-
     contigs =  SeqIO.index(args.assm, 'fasta')
+
     diffs_assm2ref = None
     if args.ref != None:
-        assm2ref_sam_path = align_assm2ref(args.assm, args.ref, args.num_threads, args.f)
+        assm2ref_sam_path = align_assm2ref(args.assm, args.ref, args.num_threads, args.f, args.path)
         diffs_assm2ref = assm_ref_diff(assm2ref_sam_path, args.ref)
-    modify_assembly(contigs, diffs_assm2ref, args.rd, skip_mismatch=True, fix_HP=True)
+    modify_assembly(contigs, diffs_assm2ref, args.rd, skip_mismatch=True, fix_HP=True, ref_no_trim=True)
+    

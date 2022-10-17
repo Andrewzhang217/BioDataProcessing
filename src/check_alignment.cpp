@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <assert.h>
 #include <Python.h>
 #include <iostream>
@@ -19,15 +20,20 @@
 #define T_INT 8
 #define N_INT 15
 
+/*
+
+- Try to have separate options for skipping HP ins/HP del
+- Try to change to smaller datatypes for the parsetuple if have time or sth
+- I don't think the assert statements check anything. Try with print out or sth.
+*/
 extern uint8_t min_mapping_quality_global;
 
 inline bool is_HP(const char *contig, std::uint32_t pos, std::uint32_t contig_len)
 {
-
     std::uint8_t i;
 
     bool hp = true;
-    
+
     if (pos + 3 >= contig_len)
     {
         hp = false;
@@ -37,14 +43,16 @@ inline bool is_HP(const char *contig, std::uint32_t pos, std::uint32_t contig_le
         for (i = 2; i <= 3; i++)
         {
             if (contig[pos + 1] != contig[pos + i])
+            {
                 hp = false;
+            }
         }
     }
     if (hp)
         return true;
 
     hp = true;
-    if (pos - 3 < 0)
+    if (pos < 3)
     {
         hp = false;
     }
@@ -53,23 +61,26 @@ inline bool is_HP(const char *contig, std::uint32_t pos, std::uint32_t contig_le
         for (i = 2; i <= 3; i++)
         {
             if (contig[pos - 1] != contig[pos - i])
+            {
+
                 hp = false;
+            }
         }
     }
     return hp;
 }
 
-static PyObject *get_diff_cpp(PyObject *self, PyObject *args)
+static PyObject *get_diff_with_assm_cpp(PyObject *self, PyObject *args)
 {
     const char *bam_path;
     const char *contig_name;
     const char *contig;
     long contig_len; // There's some problem with these and ParseTuple if I try to use unsigned..
-    long min_mapq;   
+    long min_mapq;   // ^ it's due to using wrong type for boolean. should just use int or sth
     long min_coverage;
     double min_diff_prop;
-    bool skip_HP;
-    if (!PyArg_ParseTuple(args, "sssllldp", &bam_path, &contig_name, &contig,
+    int skip_HP;
+    if (!PyArg_ParseTuple(args, "sssllldi", &bam_path, &contig_name, &contig,
                           &contig_len, &min_mapq, &min_coverage, &min_diff_prop, &skip_HP))
         return NULL;
     auto bam = readBAM(bam_path);
@@ -105,14 +116,14 @@ static PyObject *get_diff_cpp(PyObject *self, PyObject *args)
     }
     while (pileup_iter->has_next())
     {
-        //std::cout << "BEFORE " << std::endl;
+        // std::cout << "BEFORE " << std::endl;
         auto column = pileup_iter->next();
         long rpos = column->position;
         if (rpos < pileup_iter->start())
             continue;
         if (rpos >= pileup_iter->end())
             break;
-        //std::cout <<"PASS" << std::endl;
+        // std::cout <<"PASS" << std::endl;
 
         if (rpos > expected_rpos)
         {
@@ -162,8 +173,8 @@ static PyObject *get_diff_cpp(PyObject *self, PyObject *args)
                 }
             }
         }
-        
-        assert(coverage == counts[A_INT] + counts[C_INT] + counts[G_INT] + counts[T_INT] + counts[N_INT] + num_del + num_ins);
+
+        assert(coverage == counts[A_INT] + counts[C_INT] + counts[G_INT] + counts[T_INT] + counts[N_INT] + num_del);
         if ((double)num_del / coverage >= min_diff_prop)
         {
             if (is_HP(contig, rpos, contig_len))
@@ -208,7 +219,6 @@ static PyObject *get_diff_cpp(PyObject *self, PyObject *args)
 
             continue;
         }
-
     }
     if (diffs.empty())
     {
@@ -223,23 +233,152 @@ static PyObject *get_diff_cpp(PyObject *self, PyObject *args)
         PyTuple_SetItem(diff_tuple, 2, PyLong_FromUnsignedLong(diffs[i].len));
         PyList_SetItem(result_list, i, diff_tuple);
     }
-    
+
     return result_list;
 }
+/*
+I think shifting ins/del can lead to a position being included wrongly...
+* but im skipping indel anyway due to deletions leading to high counts as
+we are not counting the number of occurrences but number of positions.
+*/
+static PyObject *get_snp_pos_cpp(PyObject *self, PyObject *args)
+{
+    const char *bam_path;
+    const char *contig_name;
+    const char *contig;
+    long contig_len;
+    long min_mapq;
+    long min_coverage;
+    double min_alt_prop;
+    int skip_HP;
+    int skip_indel;
+    // bool skip_HP;
+    if (!PyArg_ParseTuple(args, "sssllldii", &bam_path, &contig_name, &contig,
+                          &contig_len, &min_mapq, &min_coverage, &min_alt_prop, &skip_HP, &skip_indel))
+        return NULL;
+    auto bam = readBAM(bam_path);
+    std::string contig_name_string{contig_name};
+    auto pileup_iter = bam->pileup(contig_name_string + ":");
+    min_mapping_quality_global = min_mapq;
+    std::vector<std::uint32_t> positions;
+    while (pileup_iter->has_next())
+    {
+        // std::cout << "BEFORE " << std::endl;
+        auto column = pileup_iter->next();
+        long rpos = column->position;
+        if (rpos < pileup_iter->start())
+            continue;
+        if (rpos >= pileup_iter->end())
+            break;
+        // std::cout <<"PASS" << std::endl;
 
-static PyMethodDef check_assembly_methods[] = {
-    {"get_diff", get_diff_cpp, METH_VARARGS, "Return apparent disagreements between reads and assembly."},
+        std::uint16_t coverage = column->count();
+
+        if (coverage < min_coverage)
+        {
+            continue;
+        }
+        // std::cout << rpos << ", " << coverage << std::endl;
+        std::uint16_t num_del = 0;
+        std::uint16_t num_ins = 0;
+        std::uint16_t counts[16];
+        counts[A_INT] = 0;
+        counts[C_INT] = 0;
+        counts[G_INT] = 0;
+        counts[T_INT] = 0;
+        counts[N_INT] = 0;
+        /*char int2char[16] = {
+            'X', 'A', 'C', 'X',
+            'G', 'X', 'X', 'X',
+            'T', 'X', 'X', 'X',
+            'X', 'X', 'X', 'N'};*/
+        while (column->has_next())
+        {
+            auto r = column->next();
+            if (r->is_refskip())
+                continue;
+            if (r->is_del())
+            {
+                // DELETION
+                //num_del++;
+                // del counted in number of occurrences, not number of bases now
+                // do nothing here to avoid repeat counting del segments.
+            }
+            else
+            {
+                // POSITION
+                auto ibase = r->ibase(0);
+                counts[ibase]++;
+
+                if (!skip_indel)
+                {
+                    if (r->indel() > 0)
+                    {
+                        num_ins++;
+                    }
+                    else if (r->indel() < 0)
+                    {
+                        num_del++;
+                    }
+                    
+                }
+            }
+        }
+        assert(coverage == counts[A_INT] + counts[C_INT] + counts[G_INT] + counts[T_INT] + counts[N_INT] + num_del);
+
+        std::vector<std::uint16_t> all_counts;
+        all_counts.reserve(7);
+        all_counts.push_back(counts[A_INT]);
+        all_counts.push_back(counts[C_INT]);
+        all_counts.push_back(counts[G_INT]);
+        all_counts.push_back(counts[T_INT]);
+        all_counts.push_back(counts[N_INT]);
+
+        if (!skip_indel && (!skip_HP || !is_HP(contig, rpos, contig_len)))
+        {
+            all_counts.push_back(num_del);
+            all_counts.push_back(num_ins);
+        }
+        struct sort_struct
+        {
+            bool operator()(std::uint16_t i, std::uint16_t j)
+            {
+                return i > j;
+            }
+        } descending;
+        std::sort(all_counts.begin(), all_counts.end(), descending);
+        std::uint32_t sum_counts = counts[A_INT] + counts[C_INT] + counts[G_INT] + counts[T_INT] + counts[N_INT] + num_del + num_ins;
+        if ((double)all_counts[1] / sum_counts > min_alt_prop)
+        {
+            positions.push_back(rpos);
+        }
+    }
+
+    PyObject *result_list = PyList_New(positions.size());
+    for (std::uint32_t i = 0; i < positions.size(); i++)
+    {
+        PyList_SetItem(result_list, i, PyLong_FromUnsignedLong(positions[i]));
+    }
+
+    return result_list;
+
+    // Py_RETURN_NONE;
+}
+
+static PyMethodDef check_alignment_methods[] = {
+    {"get_diff_with_assm", get_diff_with_assm_cpp, METH_VARARGS, "Return apparent disagreements between reads and assembly."},
+    {"get_snp_pos", get_snp_pos_cpp, METH_VARARGS, "Return apparent snps positions."},
     {NULL, NULL, 0, NULL}};
 
-static struct PyModuleDef check_assembly_definition = {
+static struct PyModuleDef check_alignment_definition = {
     PyModuleDef_HEAD_INIT,
-    "check_assembly",
-    "Check assembly using aligned reads.",
+    "check_alignment",
+    "Check alignments.",
     -1,
-    check_assembly_methods};
+    check_alignment_methods};
 
-PyMODINIT_FUNC PyInit_check_assembly(void)
+PyMODINIT_FUNC PyInit_check_alignment(void)
 {
     Py_Initialize();
-    return PyModule_Create(&check_assembly_definition);
+    return PyModule_Create(&check_alignment_definition);
 }
