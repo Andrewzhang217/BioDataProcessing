@@ -225,9 +225,6 @@ def get_reads(input_file):
     records_map = {}
     # records = list(SeqIO.parse(input_file, file_type))
     for record in SeqIO.parse(input_file, file_type):
-        underscore_idx = record.id.index('_')
-        record.id = record.id[:underscore_idx]
-        
         record.seq = str(record.seq).upper()
         records_map[record.id] = CustomSeqRecord(record.name, record.id, record.description, record.seq)
 
