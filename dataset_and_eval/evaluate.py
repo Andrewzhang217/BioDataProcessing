@@ -195,7 +195,7 @@ def main():
     
     # evaluate assembly with dgenies
     print('Starting dgenies...', file=sys.stderr)
-    timeout = config['dgenies']['timeout'] * 3600
+    timeout = int(config['dgenies']['timeout']) * 3600
     try:
         with init_driver(dgenies_dir) as driver:
             dgenies_proc = startup(port_number)
@@ -207,7 +207,7 @@ def main():
                 assembly_paths[0],
                 3, timeout, 30)
             #wait_for_download(dgenies_dir, num_file1, 30)
-            time.sleep(20)
+            time.sleep(60)
             print('Plotting...', file=sys.stderr)
             plot(driver,
                 port_number,
