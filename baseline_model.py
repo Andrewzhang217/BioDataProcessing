@@ -6,6 +6,7 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 import edlib
+from tqdm import tqdm
 from pathlib import Path
 from collections import defaultdict, Counter
 import time
@@ -268,7 +269,9 @@ def parse_args():
     return args
 
 
-def generate_cigar_correct_error(overlap_map, reads):
+def generate_cigar_correct_error(overlap_map):
+    global reads
+
     cigar_list = generate_cigar(overlap_map, reads)
     seq_lst = []
     for target_read in cigar_list:
@@ -283,7 +286,8 @@ def generate_cigar_correct_error(overlap_map, reads):
 
 
 def main(args):
-    reads = get_reads(args.input)
+    # reads = get_reads(args.input)
+
     overlap_map = parse_paf(args.paf)
     print("finish parsing")
     workers = args.thread
@@ -292,19 +296,18 @@ def main(args):
     overlap_keys = list(overlap_map)
     overlap_list = overlap_map.items()
     
-    with Manager() as manager, ProcessPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=workers) as executor:
         # step = int(len(overlap_map) / workers)
         step = 10
-        managed_reads = manager.dict(reads)
+        # managed_reads = manager.dict(reads)
         # for i in range(0, 1000, step):
         for i in range(0, len(overlap_list), step):
             end = min(i + step, len(overlap_list))
             curr_dict = {k : overlap_map[k] for k in overlap_keys[i : end]}
-            f = executor.submit(generate_cigar_correct_error, curr_dict, managed_reads)
+            f = executor.submit(generate_cigar_correct_error, curr_dict)
             futures_ec_reads.append(f)
 
-        for result in as_completed(futures_ec_reads):
-            # pass
+        for result in tqdm(as_completed(futures_ec_reads)):
             seq_lst.extend(result.result())
     SeqIO.write(seq_lst, args.output, 'fasta')
 
@@ -321,9 +324,9 @@ def wrapper():
 
 
 if __name__ == '__main__':
-    set_start_method('forkserver')
-   
     args = parse_args()
+    reads = get_reads(args.input)
+    # set_start_method('forkserver')
     
     t1 = time.time()
     main(args)
