@@ -239,14 +239,10 @@ def parse_paf(paf_file):
             line = line.strip().split('\t')
             
             query_name = line[0]
-            underscore_idx = query_name.index('_')
-            query_name = query_name[:underscore_idx]
             query_start = int(line[2])
             query_end = int(line[3])
             strand = line[4] 
             target_name = line[5]
-            underscore_idx = target_name.index('_')
-            target_name = target_name[:underscore_idx]
             target_start = int(line[7])
             target_end = int(line[8])
         
